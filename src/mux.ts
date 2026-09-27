@@ -16,8 +16,7 @@ import { controlDir, ensurePrivateDir, shq } from "./util.js";
 const CONTROL_PERSIST = 600; // seconds a master stays alive after the last client detaches
 const CONNECT_TIMEOUT = 12; // seconds, for establishing the connection
 const MASTER_WAIT_MS = 15000; // how long to wait for the master socket to appear
-const DEFAULT_TIMEOUT_MS = 120000;
-const MAX_TIMEOUT_MS = 600000;
+const DEFAULT_TIMEOUT_MS = 120000; // mirrors the built-in bash tool default (2 minutes)
 
 const inFlight = new Map<string, Promise<void>>();
 const started = new Set<string>();
@@ -25,9 +24,16 @@ const started = new Set<string>();
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export interface ExecOptions {
-  cwd?: string;
+  /** Remote working directory to `cd` into first. Mirrors the bash tool's `workdir`. */
+  workdir?: string;
+  /** Extra environment variables to `export` on the remote host before running. */
   env?: Record<string, string>;
+  /** Per-call timeout in milliseconds (default 120000). Mirrors the bash tool. */
   timeoutMs?: number;
+  /** Abort the running command (kills the ssh process) when this signal fires. */
+  signal?: AbortSignal;
+  /** Live output callback (stdout+stderr chunks as they arrive), used to stream a preview like the bash tool does. */
+  onOutput?: (chunk: string) => void;
 }
 
 export interface ExecResult {
@@ -35,6 +41,7 @@ export interface ExecResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  aborted: boolean;
 }
 
 export function ctrlPathFor(alias: string): string {
@@ -139,23 +146,43 @@ export function ensureMaster(alias: string): Promise<void> {
   return p;
 }
 
-function runSsh(args: string[], timeoutMs: number): Promise<ExecResult> {
+function runSsh(
+  args: string[],
+  timeoutMs: number,
+  opts: Pick<ExecOptions, "signal" | "onOutput"> = {},
+): Promise<ExecResult> {
   return new Promise((resolve) => {
     const proc = child.spawn("ssh", args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
 
     const t = setTimeout(() => {
       timedOut = true;
       proc.kill("SIGKILL");
     }, timeoutMs);
 
+    const onAbort = () => {
+      if (proc.exitCode === null) {
+        aborted = true;
+        proc.kill("SIGKILL");
+      }
+    };
+    if (opts.signal) {
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
     proc.stdout?.on("data", (d) => {
-      stdout += String(d);
+      const text = String(d);
+      stdout += text;
+      opts.onOutput?.(text);
     });
     proc.stderr?.on("data", (d) => {
-      stderr += String(d);
+      const text = String(d);
+      stderr += text;
+      opts.onOutput?.(text);
     });
     proc.on("error", (e) => {
       clearTimeout(t);
@@ -164,11 +191,12 @@ function runSsh(args: string[], timeoutMs: number): Promise<ExecResult> {
         stdout,
         stderr: stderr || `remote_bash: failed to spawn ssh: ${e.message}`,
         timedOut: false,
+        aborted: false,
       });
     });
     proc.on("close", (code) => {
       clearTimeout(t);
-      resolve({ exitCode: code ?? -1, stdout, stderr, timedOut });
+      resolve({ exitCode: code ?? -1, stdout, stderr, timedOut, aborted });
     });
   });
 }
@@ -178,9 +206,9 @@ export async function execRemote(alias: string, command: string, opts: ExecOptio
   const cp = ctrlPathFor(alias);
 
   const prefix: string[] = [];
-  if (opts.cwd) {
-    if (opts.cwd.includes("\0")) throw new Error("remote_bash: cwd contains a NUL byte");
-    prefix.push(`cd ${shq(opts.cwd)}`);
+  if (opts.workdir) {
+    if (opts.workdir.includes("\0")) throw new Error("remote_bash: workdir contains a NUL byte");
+    prefix.push(`cd ${shq(opts.workdir)}`);
   }
   if (opts.env && Object.keys(opts.env).length > 0) {
     for (const [k, v] of Object.entries(opts.env)) {
@@ -205,7 +233,8 @@ export async function execRemote(alias: string, command: string, opts: ExecOptio
     shq(script),
   ];
 
-  return runSsh(args, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const res = await runSsh(args, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts);
+  return res;
 }
 
 /** Best-effort shutdown of tracked masters (used on process exit; ControlPersist also self-cleans). */

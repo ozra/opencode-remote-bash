@@ -1,7 +1,7 @@
 import { type Plugin, tool } from "@opencode-ai/plugin";
 import { computeAllowlist } from "./config.js";
 import { execRemote, sweepMasters } from "./mux.js";
-import { truncate } from "./util.js";
+import { spoolOutput, truncate } from "./util.js";
 
 try {
   process.once("exit", () => {
@@ -23,26 +23,33 @@ export const RemoteBash: Plugin = async () => {
           "Run a command on a remote host over an SSH ControlMaster-multiplexed connection. " +
           "`hostalias` must be one of the aliases returned by `remote_known_hosts` (resolved from ~/.ssh/config or an explicit allowlist). " +
           "The command runs through `bash -lc` on the remote host; the remote host's regular ~/.ssh/config (identities, ProxyJump, ports) is honored. " +
-          "Returns the remote command's exit code, stdout and stderr (each truncated at 16 KiB). " +
+          "stdout and stderr are combined into one output stream, like the built-in `bash` tool. " +
           "Call `remote_known_hosts` first to discover valid aliases.",
         args: {
           hostalias: tool.schema
             .string()
             .describe("SSH config alias of the target host (e.g. web1, db1, bastion)"),
-          command: tool
-            .schema.string()
-            .describe("Shell command to run remotely (executed via `bash -lc '...'`)"),
-          cwd: tool.schema.string().optional().describe("Remote working directory to `cd` into before running"),
+          command: tool.schema.string().describe("The command to execute"),
+          timeout: tool.schema.number().optional().describe("Optional timeout in milliseconds"),
+          workdir: tool.schema
+            .string()
+            .optional()
+            .describe(
+              "The working directory to run the command in on the remote host. Defaults to the remote user's current directory. Use this instead of 'cd' commands.",
+            ),
+          description: tool.schema.string().describe(
+            "Clear, concise description of what this command does in 5-10 words. Examples:\n" +
+              "Input: ls\nOutput: Lists files in current directory\n\n" +
+              "Input: git status\nOutput: Shows working tree status\n\n" +
+              "Input: npm install\nOutput: Installs package dependencies\n\n" +
+              "Input: mkdir foo\nOutput: Creates directory 'foo'",
+          ),
           env: tool.schema
             .record(tool.schema.string(), tool.schema.string())
             .optional()
             .describe("Extra environment variables to `export` on the remote host before running"),
-          timeout: tool.schema
-            .number()
-            .optional()
-            .describe("Per-call timeout in milliseconds (default 120000, clamped to [1000, 600000])"),
         },
-        async execute(args) {
+        async execute(args, ctx) {
           const allow = computeAllowlist();
           const allowed = allow.allowed;
 
@@ -58,27 +65,73 @@ export const RemoteBash: Plugin = async () => {
           const command = (args.command ?? "").trim();
           if (!command) throw new Error("remote_bash: command must be a non-empty string.");
 
-          const timeout = Math.min(Math.max(args.timeout ?? 120000, 1000), 600000);
+          if (args.timeout !== undefined && args.timeout < 0) {
+            throw new Error(`Invalid timeout value: ${args.timeout}. Timeout must be a positive number.`);
+          }
+          const timeout = args.timeout ?? 120000;
+
+          const description = args.description ?? "";
+          const MAX_METADATA_LENGTH = 30000;
+          let preview = "";
+          let lastEmit = 0;
+
+          const emit = (force: boolean) => {
+            const now = Date.now();
+            if (!force && now - lastEmit < 120) return;
+            lastEmit = now;
+            const pv = preview.length > MAX_METADATA_LENGTH ? "..." + preview.slice(-MAX_METADATA_LENGTH) : preview;
+            try {
+              ctx.metadata({ metadata: { output: pv, description } });
+            } catch {
+              /* best effort */
+            }
+          };
 
           const res = await execRemote(args.hostalias, command, {
-            cwd: args.cwd,
+            workdir: args.workdir,
             env: args.env,
             timeoutMs: timeout,
+            signal: ctx.abort,
+            onOutput: (chunk) => {
+              preview = (preview + chunk).slice(-MAX_METADATA_LENGTH);
+              emit(false);
+            },
           });
+          emit(true);
+
+          const raw = res.stdout + (!res.stderr ? "" : "\n" + res.stderr);
+          const tail = truncate(raw);
+          let output = tail.text;
+          if (!output.trim()) output = "(no output)";
+
+          let spoolPath: string | undefined;
+          if (tail.truncated) {
+            spoolPath = spoolOutput(raw);
+            output = `...output truncated...\n\nFull output saved to: ${spoolPath}\n\n` + output;
+          }
+
+          const meta: string[] = [];
+          if (res.timedOut) {
+            meta.push(
+              `remote_bash tool terminated command after exceeding timeout ${timeout} ms. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value in milliseconds.`,
+            );
+          }
+          if (res.aborted) meta.push("User aborted the command");
+          if (meta.length > 0) output += "\n\n<remote_bash_metadata>\n" + meta.join("\n") + "\n</remote_bash_metadata>";
 
           const so = truncate(res.stdout);
           const se = truncate(res.stderr);
-          const statusLine = res.timedOut
-            ? `[timed out after ${timeout}ms]`
-            : `exit code: ${res.exitCode}`;
-          const body = ["stdout:", so.text, ...(se.text ? ["stderr:", se.text] : [])].join("\n");
 
           return {
-            output: `${statusLine}\n${body}`,
+            title: description,
+            output,
             metadata: {
               hostalias: args.hostalias,
-              exitCode: res.exitCode,
-              timedOut: res.timedOut,
+              description,
+              output: preview || output,
+              exit: res.timedOut || res.aborted ? null : res.exitCode,
+              truncated: tail.truncated,
+              ...(spoolPath ? { outputPath: spoolPath } : {}),
               stdout: so.text,
               stderr: se.text,
               stdoutTruncated: so.truncated,

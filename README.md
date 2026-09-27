@@ -12,17 +12,32 @@ in your fleet over plain SSH — no agents or daemons to install on the targets.
 
 ### `remote_bash`
 
+Its `command`, `timeout`, `workdir` and `description` arguments mirror the built-in
+[`bash`](https://opencode.ai) tool so the two behave as similarly as possible — the only
+addition is `hostalias` (which host to run on) and an optional `env` override.
+
 ```
-remote_bash(hostalias, command, { cwd?, env?, timeout? })
-  -> { exitCode, stdout, stderr }
+remote_bash(hostalias, command, { description, timeout?, workdir?, env? })
 ```
 
 - `hostalias` is **validated against an allowlist** (see [Host source](#host-source)) —
   the model can never reach an arbitrary host.
+- `description` (required) — "Clear, concise description of what this command does in 5-10
+  words", exactly like the built-in bash tool.
+- `workdir` (optional) — remote working directory to run in; defaults to the remote user's
+  current directory. Use this instead of `cd` commands.
+- `timeout` (optional, default `120000` ms) — a negative value is rejected
+  (`Invalid timeout value: X. Timeout must be a positive number.`), matching the bash tool.
+- `env` (optional) — extra environment variables to `export` on the remote host.
 - Everything is sent as a single argv through `--`, and the command string is
   single-quote-escaped for the remote `bash -lc`, so no local option injection is possible.
-- Stdout/stderr are captured and truncated at 16 KiB each; per-call timeout (default 120 s,
-  clamped to `[1000, 600000]` ms) so the model can't hang the session.
+- Like bash, stdout+stderr are combined into one output stream, the tail of which is
+  returned with `...output truncated... Full output saved to: <path>` when it overruns
+  (16 KiB), with `(no output)` when empty; timeouts end with a
+  `<remote_bash_metadata>` note. Partial output streams into the tool preview during the
+  run, and the command is killed if the user aborts the call.
+- Returns `{ title: <description>, output, metadata: { hostalias, description, output, exit,
+  truncated, outputPath?, stdout?, stderr?, ... } }`.
 
 ### `remote_known_hosts`
 
@@ -92,7 +107,7 @@ be built to `dist/` with `bun run build`.
 ```sh
 bun install
 bun run typecheck   # tsc --noEmit
-bun run build       # bundle dist/ (single file, @opencode-ai/plugin external)
+bun run build       # tsc -p tsconfig.build.json -> dist/ (ESM + .d.ts)
 ```
 
 ## Security notes
@@ -100,7 +115,7 @@ bun run build       # bundle dist/ (single file, @opencode-ai/plugin external)
 - Strict allowlist: any `hostalias` outside the resolved source is rejected.
 - Remote command is built from single-quote-escaped parts (`cd`/`export`/command) — no
   shell re-tokenization of user input outside the intended `bash -lc '…'`.
-- `env` keys are validated (`[A-Za-z_][A-Za-z0-9_]*`); `cwd` is NUL-checked.
+- `env` keys are validated (`[A-Za-z_][A-Za-z0-9_]*`); `workdir` is NUL-checked.
 - Output truncation + hard per-call timeout keep runaway output/commands contained.
 - Masters require `BatchMode=yes` so a missing key fails fast instead of hanging on a prompt.
 
