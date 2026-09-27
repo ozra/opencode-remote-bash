@@ -1,0 +1,41 @@
+{
+  "name": "opencode-remote-bash",
+  "version": "0.1.0",
+  "description": "OpenCode plugin: run bash commands on remote hosts over SSH ControlMaster multiplexing with a host-alias allowlist (remote_bash + remote_known_hosts tools).",
+  "type": "module",
+  "license": "MIT",
+  "author": "Oscar Campbell",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "bun build ./src/index.ts --outdir ./dist --external @opencode-ai/plugin --target bun"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "ssh",
+    "remote",
+    "bash",
+    "multiplexing"
+  ],
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.0.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.14.29",
+    "@types/node": "^22.13.0",
+    "typescript": "^5.8.0"
+  }
+}
