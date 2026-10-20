@@ -1,6 +1,6 @@
 {
   "name": "opencode-remote-bash",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "OpenCode plugin: run bash commands on remote hosts over SSH ControlMaster multiplexing with a host-alias allowlist (remote_bash + remote_known_hosts tools).",
   "type": "module",
   "license": "MIT",
@@ -31,6 +31,7 @@
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
+    "test": "node --test test/*.test.mjs",
     "prepack": "npm run clean && npm run build",
     "prepublishOnly": "npm run clean && npm run build"
   },
@@ -42,11 +43,10 @@
     "bash",
     "multiplexing"
   ],
-  "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.0.0"
+  "dependencies": {
+    "@opencode/plugin": "2.0.32"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.14.29",
     "@types/node": "^22.13.0",
     "typescript": "^5.8.0"
   }

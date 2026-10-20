@@ -51,20 +51,25 @@ Call this first so the model knows which `hostalias` values are valid and what t
 
 ## Host source
 
-File: `~/.config/opencode/plugin/remote_bash.json` (env override `REMOTE_BASH_HOSTS`):
+Set `hosts` in the plugin's options in `~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "remote_bash": {
-    "hosts": "ssh-config"
-  }
+  "plugins": [
+    {
+      "package": "/path/to/opencode-remote-bash",
+      "options": { "hosts": "ssh-config" }
+    }
+  ]
 }
 ```
 
 - `"ssh-config"` (default) — allow any alias that appears in `~/.ssh/config`.
 - `["web1", "db1", "bastion"]` — explicit allowlist.
 - Env override: `REMOTE_BASH_HOSTS` accepts `"ssh-config"`, a JSON array, or a
-  comma-separated list, and takes precedence over the file.
+  comma-separated list, and takes precedence over plugin options.
+- The old `plugin/remote_bash.json` file is no longer read. Move its
+  `remote_bash.hosts` value into the plugin's `options.hosts` before upgrading.
 
 ## SSH multiplexing
 
@@ -81,20 +86,29 @@ File: `~/.config/opencode/plugin/remote_bash.json` (env override `REMOTE_BASH_HO
 
 ## Install (source-build / local)
 
-The plugin is loaded directly from source (no npm publish needed). Point opencode's global
-plugin directory at this repo:
+Requires OpenCode 2.0.32 or newer. Build the checkout:
 
 ```sh
-mkdir -p ~/.config/opencode/plugins
-ln -s <repo>/src/index.ts ~/.config/opencode/plugins/remote-bash.ts
+npm ci
+npm run build
 ```
 
-Restart opencode; `remote_bash` and `remote_known_hosts` should appear. The host's
-`~/.ssh/config` is read from `$HOME`, and the master socket directory is created under
-`~/.ssh/`.
+Add the checkout directory to `plugins` in `~/.config/opencode/opencode.json`:
 
-As a regular npm-style plugin (for opencode config `"plugin": [...]`), the package can also
-be built to `dist/` with `bun run build`.
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["/path/to/opencode-remote-bash"]
+}
+```
+
+The package's default export is the OpenCode 2 plugin. V1 entrypoints and the
+temporary `/v2` subpath are retired. Remove old discovery symlinks to avoid
+loading the plugin twice. Run `opencode service restart` after rebuilding an
+already loaded checkout, then check `opencode plugin list`.
+
+The host's `~/.ssh/config` is read from `$HOME`, and the master socket directory
+is created under `~/.ssh/`. No separate plugin configuration file is needed.
 
 ## Requirements
 
@@ -105,9 +119,10 @@ be built to `dist/` with `bun run build`.
 ## Development
 
 ```sh
-bun install
-bun run typecheck   # tsc --noEmit
-bun run build       # tsc -p tsconfig.build.json -> dist/ (ESM + .d.ts)
+npm ci
+npm run typecheck
+npm run build
+npm test
 ```
 
 ## Security notes

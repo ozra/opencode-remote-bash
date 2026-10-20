@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import { configFile, sshConfigFile } from "./util.js";
+import { sshConfigFile } from "./util.js";
 import { parseSshConfig, type ParsedConfig } from "./sshconfig.js";
 
 export type HostSource = { mode: "ssh-config" } | { mode: "list"; aliases: string[] };
@@ -11,7 +11,7 @@ export interface Allowlist {
   error?: string;
 }
 
-function readHostSourceValue(): unknown {
+function readHostSourceValue(hosts?: unknown): unknown {
   const env = process.env.REMOTE_BASH_HOSTS;
   if (env && env.trim()) {
     try {
@@ -21,18 +21,7 @@ function readHostSourceValue(): unknown {
     }
   }
 
-  const p = configFile();
-  if (!fs.existsSync(p)) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(p, "utf8"));
-    if (parsed && typeof parsed === "object") {
-      const hosts = (parsed as { remote_bash?: { hosts?: unknown } }).remote_bash?.hosts;
-      if (hosts !== undefined) return hosts;
-    }
-  } catch (e) {
-    console.error(`remote_bash: failed to parse ${p}: ${(e as Error).message}`);
-  }
-  return undefined;
+  return hosts;
 }
 
 function coerceHostSource(value: unknown): HostSource | undefined {
@@ -63,8 +52,8 @@ function coerceHostSource(value: unknown): HostSource | undefined {
   return undefined;
 }
 
-export function resolveHostSource(): HostSource | { error: string } {
-  const value = readHostSourceValue();
+export function resolveHostSource(hosts?: unknown): HostSource | { error: string } {
+  const value = readHostSourceValue(hosts);
   if (value === undefined) return { mode: "ssh-config" };
   const src = coerceHostSource(value);
   if (!src) {
@@ -75,8 +64,8 @@ export function resolveHostSource(): HostSource | { error: string } {
   return src;
 }
 
-export function computeAllowlist(): Allowlist {
-  const source = resolveHostSource();
+export function computeAllowlist(hosts?: unknown): Allowlist {
+  const source = resolveHostSource(hosts);
   if ("error" in source) {
     return { source: { mode: "list", aliases: [] }, allowed: new Set(), parsed: null, error: source.error };
   }
@@ -89,7 +78,7 @@ export function computeAllowlist(): Allowlist {
       source,
       allowed: new Set(),
       parsed: null,
-      error: `SSH config not found at ${p} — add host aliases to ~/.ssh/config or set hosts via the plugin config file (${configFile()}) / REMOTE_BASH_HOSTS`,
+      error: `SSH config not found at ${p}. Add aliases to ~/.ssh/config or set the plugin's hosts option / REMOTE_BASH_HOSTS.`,
     };
   }
   const parsed = parseSshConfig(p);

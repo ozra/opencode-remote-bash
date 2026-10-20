@@ -44,10 +44,6 @@ export function controlDir(): string {
   return path.join(homeDir(), ".ssh", "cm_opencode");
 }
 
-export function configFile(): string {
-  return path.join(homeDir(), ".config", "opencode", "plugin", "remote_bash.json");
-}
-
 export function sshConfigFile(): string {
   return path.join(homeDir(), ".ssh", "config");
 }
